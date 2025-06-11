@@ -4,6 +4,7 @@
 #include <numeric>
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 
 // __global__ is keyword to define kernel function
 __global__
@@ -73,6 +74,13 @@ int main(void){
 
   float min_latency = *std::min_element(latencies.begin(), latencies.end());
   float max_latency = *std::max_element(latencies.begin(), latencies.end());
+
+  // Write latencies to a csv file for plotting.
+  std::ofstream outfile("latencies.csv");
+  for (float t: latencies) {
+	  outfile << t << std::endl;
+  }
+  outfile.close();
 	
   // Output results
   printf("SAXPY Latency Benchmark (%d runs)\n", numRuns);
