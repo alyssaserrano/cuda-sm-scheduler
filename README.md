@@ -1,8 +1,8 @@
 # gpu-benchmark
 
-This project benchmarks GPU kernel latency variance with ml models. It is intended as a controlled dummy workload to evaluate SM/TPC partitioning strategies on NVIDIA GPUs.
+This project implements 1) baseline sm partition policy and 2) novel sm partition policy. Furthermore, benchmarks GPU kernel latency variance with ml models. It is intended as a controlled dummy workload to evaluate SM/TPC partitioning strategies on NVIDIA GPUs.
 
-The project supports latency measurement, error checking, and can serve as a foundation for more complex GPU benchmarking.
+The project supports latency/latency variance measurement, error checking, and can serve as a foundation for more complex GPU benchmarking.
 
 ---
 
@@ -10,10 +10,11 @@ The project supports latency measurement, error checking, and can serve as a fou
 
 The purpose of this project is to:
 
-- Benchmark CUDA kernel execution latency.
-- Analyze the impact of GPU compute partitioning on performance.
+- Implementation of a simulated sm partition policy.
+- Novel sm partition policy.
+- Benchmark CUDA kernel execution latency/latency variance.
+- Analyze the impact of GPU sm partitioning on performance.
 - Provide a reproducible framework for evaluating SM/TPC isolation strategies.
-- Use a minimal workload (`saxpy`) to isolate latency effects introduced by resource partitioning.
 
 This benchmark is suitable for Jetson-class embedded devices.
 
