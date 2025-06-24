@@ -30,8 +30,18 @@ This benchmark is suitable for Jetson-class embedded devices.
 
 ### Build Instructions
 
-To compile the benchmark:
-
+1. **Build libsmctrl library**
 ```bash
-nvcc -o saxpy saxpy.cu
+cd ~/cuda-sm-scheduler/lib/libsmctrl
+make
+cd ~/cuda-sm-scheduler
+```
+2. **Build partition script**
+```bash
+mkdir -p build
+cd build
+cmake ..
+make -j$(nproc)
+./run_scheduler
+```
 
