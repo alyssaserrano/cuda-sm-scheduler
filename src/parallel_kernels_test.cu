@@ -8,6 +8,18 @@
 
 // __global__ is keyword to define kernel function
 __global__
+void compute_heavy_kernel(float* output, int N) {
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx < N) {
+        float sum = 0.0f;
+        for (int i = 0; i < 1000; ++i) {
+            sum += sinf(idx * 0.001f + i);
+        }
+        output[idx] = sum;
+    }
+}
+
+__global__
 void saxpy(int n, float a, float *x, float *y)
 {
 	int i = blockIdx.x*blockDim.x + threadIdx.x;	// Adding the block dimension of x and thread of x together.
@@ -47,7 +59,8 @@ int main(void){
 
 	  cudaEventRecord(start);
 
-	  saxpy<<<(N+255)/256, 256>>>(N, 2.0f, d_x, d_y);
+	  //saxpy<<<(N+255)/256, 256>>>(N, 2.0f, d_x, d_y);
+	  compute_heavy_kernel<<<(N + 255) / 256, 256>>>(d_y, N);
 
 	  cudaEventRecord(stop);
 
@@ -76,14 +89,13 @@ int main(void){
   float max_latency = *std::max_element(latencies.begin(), latencies.end());
 
   // Write latencies to a csv file for plotting.
-  std::ofstream outfile("latencies.csv");
+  /*std::ofstream outfile("latencies.csv");
   for (float t: latencies) {
 	  outfile << t << std::endl;
   }
-  outfile.close();
+  outfile.close();*/
 	
   // Output results
-  printf("SAXPY Latency Benchmark (%d runs)\n", numRuns);
   printf("Average latency: %.6f ms\n", mean);
   printf("Variance       : %.6f ms^2\n", variance);
   printf("Min latency    : %.6f ms\n", min_latency);
@@ -93,10 +105,10 @@ int main(void){
   cudaMemcpy(y, d_y, N*sizeof(float), cudaMemcpyDeviceToHost);	// Copies results from device to host
 
   // The max error should be 0.0000
-  float maxError = 0.0f;
+  /*float maxError = 0.0f;
   for (int i = 0; i < N; i++)
     maxError = max(maxError, abs(y[i]-4.0f));
-  printf("Max error: %f\n", maxError);
+  printf("Max error: %f\n", maxError);*/
 
   cudaFree(d_x);	// Typical protocol of releasing memory of both device and host.
   cudaFree(d_y);

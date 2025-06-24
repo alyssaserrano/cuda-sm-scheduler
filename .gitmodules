@@ -1,0 +1,3 @@
+[submodule "lib/libsmctrl"]
+	path = lib/libsmctrl
+	url = http://rtsrv.cs.unc.edu/git/libsmctrl.git
