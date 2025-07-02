@@ -1,0 +1,7 @@
+{
+    "docker": {
+        "run": false
+    },
+    "os_uname_machine": "aarch64",
+    "os_uname_all": "Linux razorramon 6.14.2-tegra #4 SMP PREEMPT Mon Apr 14 20:12:05 PDT 2025 aarch64 aarch64 aarch64 GNU/Linux"
+}
