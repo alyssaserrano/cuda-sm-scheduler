@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <cmath>
 #include <fstream>
-#include "libsmctrl.h" // libsmctrl library
 
 /**** MACROS ****/
 // Get the ID of the current SM
@@ -41,99 +40,120 @@
 #define __SMC_End }
 
 // Test kernels for now
+/**** GPU-side Code ****/
 __global__
-void compute_heavy_kernel(float* output, int N) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx == 0)
-        printf("[stream B] running!\n");
+void kernel1(float* input, float* output, int N,
+             unsigned int* SMC_chunkCount, unsigned int* SMC_newChunkSeq, unsigned int SMC_chunksPerSM) {
+    __SMC_Begin // Start SM-centric logic
 
-    if (idx < N) {
-        float sum = 0.0f;
-        for (int i = 0; i < 1000; ++i) {
-            sum += sinf(idx * 0.001f + i);
-        }
-        output[idx] = sum;
+    __SMC_getSMid; // Retrieve SM ID
+
+    // Ensure only SMs 0-7 execute this kernel
+    if (__SMC_smid >= 8) return;
+
+    int idx = threadIdx.x + blockDim.x * blockIdx.x; // Compute thread index (original kernel logic)
+
+    // Replace original chunk ID with SM-centric chunkID
+    int chunkID = __SMC_chunkID;
+
+    // Process work based on SM-centric chunkID
+    if (chunkID * blockDim.x + threadIdx.x < N) {
+        int globalIndex = chunkID * blockDim.x + threadIdx.x; // Map chunkID to global index
+        output[globalIndex] = input[globalIndex] * 2.0f; // Example computation
     }
+
+    __SMC_End // End SM-centric logic
 }
 
 __global__
-void saxpy(int n, float a, float *x, float *y)
-{
-        int i = blockIdx.x*blockDim.x + threadIdx.x;    // Adding the block dimension of x and thread of x together.
-        if (i == 0){                             // one print per kernel launch
-                printf("[stream A] running!\n");
-        }
+void kernel2(float* input, float* output, int N,
+             unsigned int* SMC_chunkCount, unsigned int* SMC_newChunkSeq, unsigned int SMC_chunksPerSM) {
+    __SMC_Begin // Start SM-centric logic
 
-        if (i < n) y[i] = a*x[i] + y[i];                // If the sum of i is greater than n then add arrays x and y.
+    __SMC_getSMid; // Retrieve SM ID
+
+    // Ensure only SMs 8-15 execute this kernel
+    if (__SMC_smid < 8) return;
+
+    int idx = threadIdx.x + blockDim.x * blockIdx.x; // Compute thread index (original kernel logic)
+
+    // Replace original chunk ID with SM-centric chunkID
+    int chunkID = __SMC_chunkID;
+
+    // Process work based on SM-centric chunkID
+    if (chunkID * blockDim.x + threadIdx.x < N) {
+        int globalIndex = chunkID * blockDim.x + threadIdx.x; // Map chunkID to global index
+        output[globalIndex] = input[globalIndex] * 3.0f; // Example computation
+    }
+
+    __SMC_End // End SM-centric logic
 }
 
-/**** CPU-side code ****/ 
-int main(void){
-	// Function set ups
-	int N = 1<<20;                        // Bitwise operation
-  	const size_t size = N * sizeof(float);
-  	float *x, *y, *d_x, *d_y;
-  	int numRuns = 1000;                   // For average measurement.
-  	std::vector<float> latencies;         // Dynamic vector for times.
+int main(void) {
+    int N = 1024; // Total workload size
+    int threadsPerBlock = 256;
+    unsigned int K = (N + threadsPerBlock - 1) / threadsPerBlock; // Total number of chunks (blocks)
+    unsigned int M = __SMC_numNeeded(); // Number of SMs on the GPU
+    unsigned int chunksPerSM = K / M;
 
-  	x = (float*)malloc(N*sizeof(float));  // Allocates memory for x and y (arrays) on host
-  	y = (float*)malloc(N*sizeof(float));
+    // Allocate and initialize SM-centric parameters
+    unsigned int *SMC_chunkCount1, *SMC_newChunkSeq1, *SMC_chunkCount2, *SMC_newChunkSeq2;
+    cudaMalloc(&SMC_chunkCount1, 8 * sizeof(unsigned int)); // SMs 0-7
+    cudaMalloc(&SMC_newChunkSeq1, K * sizeof(unsigned int));
+    cudaMalloc(&SMC_chunkCount2, 8 * sizeof(unsigned int)); // SMs 8-15
+    cudaMalloc(&SMC_newChunkSeq2, K * sizeof(unsigned int));
 
-  	cudaMalloc(&d_x, N*sizeof(float));    // Allocates memory for x and y on device (gpu) with pointers from host to device.
-  	cudaMalloc(&d_y, N*sizeof(float));
+    std::vector<unsigned int> hostChunkCount1(8, 0);
+    std::vector<unsigned int> hostChunkCount2(8, 0);
+    std::vector<unsigned int> hostNewChunkSeq1(K);
+    std::vector<unsigned int> hostNewChunkSeq2(K);
 
-  	for (int i = 0; i < N; i++) { // Initializes arrays
-    	x[i] = 1.0f;
-    	y[i] = 2.0f;
-  	}
+    // Initialize chunk mapping for kernel1 (SMs 0-7)
+    for (unsigned int i = 0; i < K; ++i) {
+        hostNewChunkSeq1[i] = (i % 8); // Assign chunks to SMs 0-7
+    }
 
-  	cudaMemcpy(d_x, x, N*sizeof(float), cudaMemcpyHostToDevice);  // Copies arrays from host to device
-  	cudaMemcpy(d_y, y, N*sizeof(float), cudaMemcpyHostToDevice);
+    // Initialize chunk mapping for kernel2 (SMs 8-15)
+    for (unsigned int i = 0; i < K; ++i) {
+        hostNewChunkSeq2[i] = (i % 8) + 8; // Assign chunks to SMs 8-15
+    }
 
-	// 1. Number of chunks (K) and SMs (M)
-	unsigned int K = 128;			// job chunks
-	unsigned int M = __SMC_numNeeded();	// number of SMs
+    // Copy initialized data to device memory
+    cudaMemcpy(SMC_chunkCount1, hostChunkCount1.data(), 8 * sizeof(unsigned int), cudaMemcpyHostToDevice);
+    cudaMemcpy(SMC_newChunkSeq1, hostNewChunkSeq1.data(), K * sizeof(unsigned int), cudaMemcpyHostToDevice);
 
-	// 2. Compute work per SM
-	unsigned int chunksPerSM = K / M;
+    cudaMemcpy(SMC_chunkCount2, hostChunkCount2.data(), 8 * sizeof(unsigned int), cudaMemcpyHostToDevice);
+    cudaMemcpy(SMC_newChunkSeq2, hostNewChunkSeq2.data(), K * sizeof(unsigned int), cudaMemcpyHostToDevice);
 
-	// 3. Initialize SMC controller
-	__SMC_init;
+    // Allocate device memory for the original kernel's data
+    float *d_input1, *d_output1, *d_input2, *d_output2;
+    cudaMalloc(&d_input1, N * sizeof(float));
+    cudaMalloc(&d_output1, N * sizeof(float));
+    cudaMalloc(&d_input2, N * sizeof(float));
+    cudaMalloc(&d_output2, N * sizeof(float));
 
-	// 4. Launch Kernels with libsmctrl
-	libsmctrl_set_global_mask(~0x1ull);	// Allow work on only TPC 0
+    // Initialize input data on host (example)
+    std::vector<float> input(N, 1.0f);
+    cudaMemcpy(d_input1, input.data(), N * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_input2, input.data(), N * sizeof(float), cudaMemcpyHostToDevice);
 
-	cudaStream_t stream_A, stream_B;	// Create streams for each kernel.
-	cudaStreamCreate(&stream_A);
-	cudaStreamCreate(&stream_B);
+    // Launch kernel1 (SMs 0-7)
+    kernel1<<<K, threadsPerBlock>>>(d_input1, d_output1, N, SMC_chunkCount1, SMC_newChunkSeq1, chunksPerSM);
 
-	libsmctrl_set_stream_mask(stream_A, ~0xf0ull);	// disable 0-3
-	libsmctrl_set_stream_mask(stream_B, ~0x0full);	// disable 4-7
+    // Launch kernel2 (SMs 8-15)
+    kernel2<<<K, threadsPerBlock>>>(d_input2, d_output2, N, SMC_chunkCount2, SMC_newChunkSeq2, chunksPerSM);
 
-	saxpy<<<(N+255)/256, 256, 0, stream_A>>>(N, 2.0f, d_x, d_y);
-	compute_heavy_kernel<<<(N+255)/256, 256, 0, stream_B>>>(d_y, N);
+    // Synchronize and cleanup
+    cudaDeviceSynchronize();
+    cudaFree(d_input1);
+    cudaFree(d_output1);
+    cudaFree(d_input2);
+    cudaFree(d_output2);
+    cudaFree(SMC_chunkCount1);
+    cudaFree(SMC_newChunkSeq1);
+    cudaFree(SMC_chunkCount2);
+    cudaFree(SMC_newChunkSeq2);
 
-	cudaStreamSynchronize(stream_A);
-	cudaStreamSynchronize(stream_B);
-
-	cudaDeviceSynchronize();
-
-	printf("DONE! \n");
-	cudaFree(d_x);		// Release memory of both device and host.
-	cudaFree(d_y);
-	free(x);
-	free(y);
-
-	return 0;
-}
-
-/**** GPU-side code ****/
-__global__
-void smc_kernel (unsigned int *__SMC_chunkCount, unsigned int *__SMC_chunkSeq, unsigned int __SMC_chunksPerSM){
-	__SMC_Begin
-
-	// original kernel body using __SMC_chunkID
-	printf("Handling chunk %d on SM %d\n", __SMC_chunkID, __SMC_smid);
-
-	__SMC_End
+    printf("DONE!\n");
+    return 0;
 }
