@@ -124,9 +124,6 @@ int main(void) {
     
     // SM-centric initialization
     SMC_init(K);
-    /*unsigned int SMC_workersNeeded = SMC_numNeeded();
-    unsigned int* SMC_newChunkSeq = SMC_buildChunkSeq(K, SMC_workersNeeded);
-    unsigned int* SMC_workerCount = SMC_initiateArray(SMC_workersNeeded);*/
     
     unsigned int chunksPerSM = K / SMC_workersNeeded;
     if (K % SMC_workersNeeded != 0) chunksPerSM++;
