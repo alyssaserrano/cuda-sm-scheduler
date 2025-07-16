@@ -7,7 +7,12 @@
 #include <fstream>
 #include <climits>
 
-/**** MACROS (same as before) ****/
+/**** MACROS ****/
+#define SMC_init(K) \
+	unsigned int SMC_workersNeeded = SMC_numNeeded(); \
+	unsigned int* SMC_newChunkSeq = SMC_buildChunkSeq((K), SMC_workersNeeded); \
+	unsigned int* SMC_workerCount = SMC_initiateArray(SMC_workersNeeded);
+
 #define SMC_getSMid \
     uint SMC_smid; \
     asm("mov.u32 %0, %smid;" : "=r"(SMC_smid) );
@@ -118,9 +123,10 @@ int main(void) {
     unsigned int K = (N + threadsPerBlock - 1) / threadsPerBlock;
     
     // SM-centric initialization
-    unsigned int SMC_workersNeeded = SMC_numNeeded();
+    SMC_init(K);
+    /*unsigned int SMC_workersNeeded = SMC_numNeeded();
     unsigned int* SMC_newChunkSeq = SMC_buildChunkSeq(K, SMC_workersNeeded);
-    unsigned int* SMC_workerCount = SMC_initiateArray(SMC_workersNeeded);
+    unsigned int* SMC_workerCount = SMC_initiateArray(SMC_workersNeeded);*/
     
     unsigned int chunksPerSM = K / SMC_workersNeeded;
     if (K % SMC_workersNeeded != 0) chunksPerSM++;
