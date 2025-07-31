@@ -1,3 +1,4 @@
+// sm-centric.cu
 #include <stdio.h>
 #include <cuda_runtime.h>
 #include <vector>
@@ -6,6 +7,8 @@
 #include <cmath>
 #include <fstream>
 #include <climits>
+#include "cuda-neural-network/linear_relu_linear_sigmoid.hh"
+#include "cuda-neural-network/nn_launcher.hh"
 
 /**** MACROS ****/
 #define SMC_init(K) \
@@ -56,6 +59,7 @@ unsigned int* SMC_initiateArray(unsigned int numSMs) {
     return workerCount;
 }
 
+
 /**** GPU-side Code with SM Logging ****/
 __global__
 void kernel1(float* input, float* output, int N,
@@ -82,6 +86,12 @@ void kernel1(float* input, float* output, int N,
     if (SMC_chunkID * blockDim.x + threadIdx.x < N) {
         int globalIndex = SMC_chunkID * blockDim.x + threadIdx.x;
         output[globalIndex] = input[globalIndex] * 2.0f;
+
+	// Check SM IDs that completed the work
+        //printf("SM ID: %d processed work in kernel 1, Block %d, Working CTAs %d\n", SMC_smid, blockIdx.x, SMC_workingCTAs);
+        if (offsetInCTA == 0) {
+                printf("SM ID: %d processed work in kernel 1\n", SMC_smid);
+        }
     }
 
     SMC_End
@@ -112,6 +122,12 @@ void kernel2(float* input, float* output, int N,
     if (SMC_chunkID * blockDim.x + threadIdx.x < N) {
         int globalIndex = SMC_chunkID * blockDim.x + threadIdx.x;
         output[globalIndex] = input[globalIndex] * 3.0f;
+
+	// Check SM IDs that completed the work
+	//printf("SM ID: %d processed work in kernel 2, Block %d, Working CTAs %d\n", SMC_smid, blockIdx.x, SMC_workingCTAs);
+	if (offsetInCTA == 0) {
+		printf("SM ID: %d processed work in kernel 2\n", SMC_smid);
+        }
     }
 
     SMC_End
@@ -121,15 +137,16 @@ int main(void) {
     int N = 1024;
     int threadsPerBlock = 256;
     unsigned int K = (N + threadsPerBlock - 1) / threadsPerBlock;
-    
+
     // SM-centric initialization
     SMC_init(K);
     
     unsigned int chunksPerSM = K / SMC_workersNeeded;
     if (K % SMC_workersNeeded != 0) chunksPerSM++;
-    
+
+    // Sanity check
     printf("=== SM-Centric Kernel Execution Analysis ===\n");
-    printf("Total chunks: %u, SMs: %u, Chunks per SM: %u\n", K, SMC_workersNeeded, chunksPerSM);
+    printf("Total Jobs: %u, Total chunks: %u, workers: %u, Workers per SM: %u\n",N , K, SMC_workersNeeded, chunksPerSM);
 
     // Allocate SM usage logging arrays
     int *d_sm_usage_log;
@@ -150,16 +167,35 @@ int main(void) {
     cudaMemcpy(d_SMC_workerCount2, SMC_workerCount, SMC_workersNeeded * sizeof(unsigned int), cudaMemcpyHostToDevice);
     cudaMemcpy(d_SMC_newChunkSeq2, SMC_newChunkSeq, K * sizeof(unsigned int), cudaMemcpyHostToDevice);
 
-    // Allocate kernel data
-    float *d_input1, *d_output1, *d_input2, *d_output2;
-    cudaMalloc(&d_input1, N * sizeof(float));
-    cudaMalloc(&d_output1, N * sizeof(float));
-    cudaMalloc(&d_input2, N * sizeof(float));
-    cudaMalloc(&d_output2, N * sizeof(float));
+    // Linear-Relu-Linear-Sigmoid Neural network dimensions
+    int in_features1 = 8, out_features1 = 16;
+    int in_features2 = out_features1, out_features2 = 4;
+    int batch_size = N / in_features1; // Make sure N is divisible by in_features1!
+    int NN = batch_size * in_features1;
 
-    std::vector<float> input(N, 1.0f);
-    cudaMemcpy(d_input1, input.data(), N * sizeof(float), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_input2, input.data(), N * sizeof(float), cudaMemcpyHostToDevice);
+    // Allocate and initialize host memory for weights, biases, input, output
+    std::vector<float> W1(in_features1 * out_features1, 0.05f);
+    std::vector<float> b1(out_features1, 0.0f);
+    std::vector<float> W2(in_features2 * out_features2, 0.1f);
+    std::vector<float> b2(out_features2, 0.0f);
+    std::vector<float> nn_input(NN, 1.0f);
+    std::vector<float> nn_output(out_features2 * batch_size, 0.0f);
+
+    // Allocate device memory for neural network
+    float *d_W1, *d_b1, *d_W2, *d_b2, *d_nn_input, *d_nn_output;
+    cudaMalloc(&d_W1, in_features1 * out_features1 * sizeof(float));
+    cudaMalloc(&d_b1, out_features1 * sizeof(float));
+    cudaMalloc(&d_W2, in_features2 * out_features2 * sizeof(float));
+    cudaMalloc(&d_b2, out_features2 * sizeof(float));
+    cudaMalloc(&d_nn_input, NN * sizeof(float));
+    cudaMalloc(&d_nn_output, out_features2 * batch_size * sizeof(float));
+
+    // Copy host data to device
+    cudaMemcpy(d_W1, W1.data(), in_features1 * out_features1 * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_b1, b1.data(), out_features1 * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_W2, W2.data(), in_features2 * out_features2 * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_b2, b2.data(), out_features2 * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_nn_input, nn_input.data(), NN * sizeof(float), cudaMemcpyHostToDevice);
 
     // Launch kernels
     int blocksToLaunch = std::max(K, (unsigned int)16);
@@ -167,9 +203,20 @@ int main(void) {
     printf("\n=== Launching Kernels ===\n");
     printf("Blocks per kernel: %d\n", blocksToLaunch);
     printf("Threads per block: %d\n", threadsPerBlock);
+    printf("Launching kernel with %d blocks. Expecting %u workers needed.\n", blocksToLaunch, SMC_numNeeded());
     
-    kernel1<<<blocksToLaunch, threadsPerBlock>>>(d_input1, d_output1, N, d_SMC_workerCount1, d_SMC_newChunkSeq1, chunksPerSM, 1, d_sm_usage_log);
-    kernel2<<<blocksToLaunch, threadsPerBlock>>>(d_input2, d_output2, N, d_SMC_workerCount2, d_SMC_newChunkSeq2, chunksPerSM, 1, d_sm_usage_log);
+    // Launch the fused neural network kernel using the launcher
+    launchLinearReluLinearSigmoid(
+        d_W1, d_b1, in_features1, out_features1,
+        d_W2, d_b2, in_features2, out_features2,
+        d_nn_input, d_nn_output, batch_size,
+        d_SMC_workerCount1, d_SMC_newChunkSeq1, // <--- reused here
+        chunksPerSM, SMC_workersNeeded,
+        d_sm_usage_log,
+        blocksToLaunch,
+        threadsPerBlock,
+        N
+    );
 
     cudaDeviceSynchronize();
 
@@ -192,16 +239,9 @@ int main(void) {
         }
     }
 
-    // Verify results
-    std::vector<float> output1(N), output2(N);
-    cudaMemcpy(output1.data(), d_output1, N * sizeof(float), cudaMemcpyDeviceToHost);
-    cudaMemcpy(output2.data(), d_output2, N * sizeof(float), cudaMemcpyDeviceToHost);
-    
-    printf("\n=== Results Verification ===\n");
-    printf("Sample outputs - Kernel1: %.2f, Kernel2: %.2f\n", output1[0], output2[0]);
-
     // Cleanup
-    cudaFree(d_input1); cudaFree(d_output1); cudaFree(d_input2); cudaFree(d_output2);
+    cudaFree(d_W1); cudaFree(d_b1); cudaFree(d_W2); cudaFree(d_b2);
+    cudaFree(d_nn_input); cudaFree(d_nn_output);
     cudaFree(d_SMC_workerCount1); cudaFree(d_SMC_newChunkSeq1);
     cudaFree(d_SMC_workerCount2); cudaFree(d_SMC_newChunkSeq2);
     cudaFree(d_sm_usage_log);
