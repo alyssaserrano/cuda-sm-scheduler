@@ -3,9 +3,7 @@
 #include <math.h>
 #include <cstdio>
 #include "../sm-centric_macros.hh"
-//#include "linear_layer.hh"
-//#include "relu_activation.hh"
-//#include "sigmoid_activation.hh"
+#include "linear_relu_linear_sigmoid.hh"
 
 // Device function for linear forward
 __device__ float linear_forward_elem(
@@ -99,7 +97,7 @@ __global__ void linear_relu_linear_sigmoid(
             output[out2_row * batch_size + batch_col] = final_act;
 
 	    // Print for debugging
-            printf("final_act (row %d, col %d): %f\n", out2_row, batch_col, final_act);
+            //printf("final_act (row %d, col %d): %f\n", out2_row, batch_col, final_act);
         }
 
     SMC_End

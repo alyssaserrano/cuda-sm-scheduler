@@ -7,8 +7,14 @@
 #include <cmath>
 #include <fstream>
 #include <climits>
+#include <iostream>
+#include <chrono>
+#include <ctime>
+#include <iomanip>
+#include <random>
 #include "cuda-neural-network/linear_relu_linear_sigmoid.hh"
 #include "cuda-neural-network/nn_launcher.hh"
+#include "cuda_cnn/fused_cnn.hh"
 
 /**** MACROS ****/
 #define SMC_init(K) \
@@ -37,6 +43,17 @@
 #define SMC_End }
 
 /**** HELPER FUNCTIONS ****/
+void print_timestamp(const char* label) {
+    using std::chrono::system_clock;
+    auto now = system_clock::now();
+    std::time_t now_time = system_clock::to_time_t(now);
+    auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()) % 1000;
+    std::cout << "[" << label << "] "
+              << std::put_time(std::localtime(&now_time), "%F %T")
+              << "." << std::setfill('0') << std::setw(3) << ms.count()
+              << std::endl;
+}
+
 unsigned int SMC_numNeeded() {
     int nSM = 0;
     cudaDeviceGetAttribute(&nSM, cudaDevAttrMultiProcessorCount, 0);
@@ -61,7 +78,7 @@ unsigned int* SMC_initiateArray(unsigned int numSMs) {
 
 
 /**** GPU-side Code with SM Logging ****/
-__global__
+/*__global__
 void kernel1(float* input, float* output, int N,
              unsigned int* SMC_workerCount, unsigned int* SMC_newChunkSeq, 
              unsigned int SMC_chunksPerSM, unsigned int SMC_workersNeeded,
@@ -131,7 +148,7 @@ void kernel2(float* input, float* output, int N,
     }
 
     SMC_End
-}
+}*/
 
 int main(void) {
     int N = 1024;
@@ -197,8 +214,64 @@ int main(void) {
     cudaMemcpy(d_b2, b2.data(), out_features2 * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_nn_input, nn_input.data(), NN * sizeof(float), cudaMemcpyHostToDevice);
 
+    // Fused CNN Neural Network
+    int C_in = 3, C_out = 8, H = 32, W = 32, K_h = 3, K_w = 3;
+    float bn_epsilon = 1e-5;
+    int fc_in = (H/2)*(W/2)*C_out; // after 2x2 maxpool, adjust as needed
+    int num_classes = 10;
+    int cnn_batch_size = batch_size; // or set as needed
+
+    std::vector<float> conv_weights(C_out * C_in * K_h * K_w);
+    std::vector<float> conv_bias(C_out);
+    std::vector<float> bn_gamma(C_out, 1.0f);
+    std::vector<float> bn_beta(C_out, 0.0f);
+    std::vector<float> bn_mean(C_out, 0.0f);
+    std::vector<float> bn_var(C_out, 1.0f);
+    std::vector<float> cnn_input(C_in * H * W * cnn_batch_size);
+    std::vector<float> fc_weights(num_classes * fc_in);
+    std::vector<float> fc_bias(num_classes);
+    std::vector<float> cnn_output(num_classes * cnn_batch_size, 0.0f);
+
+    // Random initialization for weights, biases, and input
+    std::mt19937 rng(42); // fixed seed for reproducibility
+    std::uniform_real_distribution<float> wdist(-0.1f, 0.1f);
+    std::uniform_real_distribution<float> idist(0.0f, 1.0f);
+
+    for (auto& w : conv_weights) w = wdist(rng);
+    for (auto& b : conv_bias) b = wdist(rng); // or 0.0f if you prefer
+    for (auto& x : cnn_input) x = idist(rng);
+    for (auto& w : fc_weights) w = wdist(rng);
+    for (auto& b : fc_bias) b = wdist(rng); // or 0.0f if you prefer
+
+    float *d_conv_weights, *d_conv_bias, *d_bn_gamma, *d_bn_beta, *d_bn_mean, *d_bn_var;
+    float *d_cnn_input, *d_fc_weights, *d_fc_bias, *d_cnn_output;
+
+    cudaMalloc(&d_conv_weights, conv_weights.size() * sizeof(float));
+    cudaMalloc(&d_conv_bias, conv_bias.size() * sizeof(float));
+    cudaMalloc(&d_bn_gamma, bn_gamma.size() * sizeof(float));
+    cudaMalloc(&d_bn_beta, bn_beta.size() * sizeof(float));
+    cudaMalloc(&d_bn_mean, bn_mean.size() * sizeof(float));
+    cudaMalloc(&d_bn_var, bn_var.size() * sizeof(float));
+    cudaMalloc(&d_cnn_input, cnn_input.size() * sizeof(float));
+    cudaMalloc(&d_fc_weights, fc_weights.size() * sizeof(float));
+    cudaMalloc(&d_fc_bias, fc_bias.size() * sizeof(float));
+    cudaMalloc(&d_cnn_output, cnn_output.size() * sizeof(float));
+
+    cudaMemcpy(d_conv_weights, conv_weights.data(), conv_weights.size() * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_conv_bias, conv_bias.data(), conv_bias.size() * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_bn_gamma, bn_gamma.data(), bn_gamma.size() * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_bn_beta, bn_beta.data(), bn_beta.size() * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_bn_mean, bn_mean.data(), bn_mean.size() * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_bn_var, bn_var.data(), bn_var.size() * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_cnn_input, cnn_input.data(), cnn_input.size() * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_fc_weights, fc_weights.data(), fc_weights.size() * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_fc_bias, fc_bias.data(), fc_bias.size() * sizeof(float), cudaMemcpyHostToDevice);
+
     // Launch kernels
     int blocksToLaunch = std::max(K, (unsigned int)16);
+    cudaStream_t stream1, stream2;
+    cudaStreamCreate(&stream1);
+    cudaStreamCreate(&stream2);
     
     printf("\n=== Launching Kernels ===\n");
     printf("Blocks per kernel: %d\n", blocksToLaunch);
@@ -206,19 +279,53 @@ int main(void) {
     printf("Launching kernel with %d blocks. Expecting %u workers needed.\n", blocksToLaunch, SMC_numNeeded());
     
     // Launch the fused neural network kernel using the launcher
+    print_timestamp("Launching LinearReluLinearSigmoid kernel");
     launchLinearReluLinearSigmoid(
         d_W1, d_b1, in_features1, out_features1,
         d_W2, d_b2, in_features2, out_features2,
         d_nn_input, d_nn_output, batch_size,
-        d_SMC_workerCount1, d_SMC_newChunkSeq1, // <--- reused here
+        d_SMC_workerCount1, d_SMC_newChunkSeq1,
         chunksPerSM, SMC_workersNeeded,
         d_sm_usage_log,
         blocksToLaunch,
         threadsPerBlock,
-        N
+        N,
+	stream1
     );
 
-    cudaDeviceSynchronize();
+    // Launch fused CNN kernel
+    print_timestamp("Launching FusedCNN kernel");
+    launchFusedNeuralNetwork(
+        d_conv_weights, d_conv_bias,
+        C_in, C_out, H, W, K_h, K_w,
+        d_bn_gamma, d_bn_beta, d_bn_mean, d_bn_var, bn_epsilon,
+        d_cnn_input, d_cnn_output,
+        d_fc_weights, d_fc_bias,
+        fc_in, num_classes,
+        d_SMC_workerCount2, d_SMC_newChunkSeq2,
+        chunksPerSM, SMC_workersNeeded,
+        d_sm_usage_log,
+        blocksToLaunch,
+        threadsPerBlock,
+        cnn_batch_size,
+	stream2
+    );
+
+    cudaStreamSynchronize(stream1);
+    cudaStreamSynchronize(stream2);
+
+    // Copy and print neural network output
+    std::vector<float> h_nn_output(out_features2 * batch_size);
+    cudaMemcpy(h_nn_output.data(), d_nn_output, out_features2 * batch_size * sizeof(float), cudaMemcpyDeviceToHost);
+
+    printf("\n=== Neural Network Output ===\n");
+    for (int i = 0; i < out_features2; ++i) {
+        printf("Class %d: ", i);
+        for (int j = 0; j < batch_size; ++j) {
+            printf("%8.5f ", h_nn_output[i * batch_size + j]);
+        }
+        printf("\n");
+    }
 
     // Copy back and analyze SM usage
     std::vector<int> sm_usage_log(32);
@@ -240,11 +347,20 @@ int main(void) {
     }
 
     // Cleanup
+    cudaStreamDestroy(stream1);
+    cudaStreamDestroy(stream2);
     cudaFree(d_W1); cudaFree(d_b1); cudaFree(d_W2); cudaFree(d_b2);
     cudaFree(d_nn_input); cudaFree(d_nn_output);
     cudaFree(d_SMC_workerCount1); cudaFree(d_SMC_newChunkSeq1);
     cudaFree(d_SMC_workerCount2); cudaFree(d_SMC_newChunkSeq2);
     cudaFree(d_sm_usage_log);
+
+    // Cleanup for CNN network
+    cudaFree(d_conv_weights); cudaFree(d_conv_bias);
+    cudaFree(d_bn_gamma); cudaFree(d_bn_beta);
+    cudaFree(d_bn_mean); cudaFree(d_bn_var);
+    cudaFree(d_cnn_input); cudaFree(d_fc_weights);
+    cudaFree(d_fc_bias); cudaFree(d_cnn_output);
     
     delete[] SMC_newChunkSeq;
     delete[] SMC_workerCount;

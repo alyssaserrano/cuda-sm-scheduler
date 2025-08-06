@@ -13,12 +13,13 @@ void launchLinearReluLinearSigmoid(
     int* d_sm_usage_log,
     int blocksToLaunch,
     int threadsPerBlock,
-    int N
+    int N,
+    cudaStream_t stream
 )
 {
     printf("[HOST] Launching fused kernel now...\n");
     // Launch the kernel
-    linear_relu_linear_sigmoid<<<blocksToLaunch, threadsPerBlock>>>(
+    linear_relu_linear_sigmoid<<<blocksToLaunch, threadsPerBlock, 0, stream>>>(
         d_W1, d_b1, in_features1, out_features1,
         d_W2, d_b2, in_features2, out_features2,
         d_input, d_output, batch_size,
@@ -34,7 +35,5 @@ void launchLinearReluLinearSigmoid(
     } else {
         printf("[HOST] Kernel launch was successful.\n");
     }
-
-    cudaDeviceSynchronize();
 }
 

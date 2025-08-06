@@ -10,5 +10,6 @@ void launchLinearReluLinearSigmoid(
     int* d_sm_usage_log,
     int blocksToLaunch,
     int threadsPerBlock,
-    int N
+    int N,
+    cudaStream_t stream
 );

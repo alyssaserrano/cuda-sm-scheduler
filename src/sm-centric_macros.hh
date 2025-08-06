@@ -28,8 +28,8 @@
          SMC_chunkIDidx < SMC_startChunkIDidx + SMC_chunksPerCTA; \
          SMC_chunkIDidx++) { \
         SMC_chunkID = SMC_newChunkSeq[SMC_chunkIDidx]; \
-	if (threadIdx.x == 0) { \
+	/*if (threadIdx.x == 0) { \
             printf("Block %d is running chunk %d on SM %d\n", blockIdx.x, SMC_chunkID, SMC_smid); \
-        }
+        }*/
 
 #define SMC_End }
