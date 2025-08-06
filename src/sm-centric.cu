@@ -12,12 +12,13 @@
 #include <ctime>
 #include <iomanip>
 #include <random>
+#include "sm-centric_macros.hh"
 #include "cuda-neural-network/linear_relu_linear_sigmoid.hh"
 #include "cuda-neural-network/nn_launcher.hh"
 #include "cuda_cnn/fused_cnn.hh"
 
 /**** MACROS ****/
-#define SMC_init(K) \
+/*#define SMC_init(K) \
 	unsigned int SMC_workersNeeded = SMC_numNeeded(); \
 	unsigned int* SMC_newChunkSeq = SMC_buildChunkSeq((K), SMC_workersNeeded); \
 	unsigned int* SMC_workerCount = SMC_initiateArray(SMC_workersNeeded);
@@ -40,7 +41,7 @@
          SMC_chunkIDidx++) { \
         SMC_chunkID = SMC_newChunkSeq[SMC_chunkIDidx];
 
-#define SMC_End }
+#define SMC_End }*/
 
 /**** HELPER FUNCTIONS ****/
 void print_timestamp(const char* label) {
