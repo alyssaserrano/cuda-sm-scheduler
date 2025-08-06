@@ -29,19 +29,13 @@ This benchmark is suitable for Jetson-class embedded devices.
 - `nvcc` compiler available in your system path
 
 ### Build Instructions
-
-1. **Build libsmctrl library**
-```bash
-cd ~/cuda-sm-scheduler/lib/libsmctrl
-make
-cd ~/cuda-sm-scheduler
+```sh
+cd src
+nvcc -I. -I./cuda-neural-network -I./cuda_cnn \
+    -o sm-centric \
+    sm-centric.cu \
+    cuda-neural-network/nn_launcher.cu \
+    cuda-neural-network/linear_relu_linear_sigmoid.cu \
+    cuda_cnn/fused_cnn_launcher.cu \
+    cuda_cnn/fused_cnn.cu
 ```
-2. **Build partition script**
-```bash
-mkdir -p build
-cd build
-cmake ..
-make -j$(nproc)
-./run_scheduler
-```
-
