@@ -12,6 +12,7 @@
 #include <ctime>
 #include <iomanip>
 #include <random>
+#include "libsmctrl.h"
 #include "sm-centric_macros.hh"
 #include "cuda-neural-network/linear_relu_linear_sigmoid.hh"
 #include "cuda-neural-network/nn_launcher.hh"
@@ -268,12 +269,22 @@ int main(void) {
     cudaMemcpy(d_fc_weights, fc_weights.data(), fc_weights.size() * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_fc_bias, fc_bias.data(), fc_bias.size() * sizeof(float), cudaMemcpyHostToDevice);
 
-    // Launch kernels
-    int blocksToLaunch = std::max(K, (unsigned int)16);
-    cudaStream_t stream1, stream2;
-    cudaStreamCreate(&stream1);
-    cudaStreamCreate(&stream2);
-    
+    /*** LAUNCH KERNELS USING LIBSMCTRL LIBRARY***/
+    int blocksToLaunch = std::max(K, (unsigned int)16) / 2;	// Had to divide by 2 since libsmctrl is a TPC/SM relationship.
+    								// Therefore diving by 2 ensures that we split the amount of work blocks
+    								// we need to do for each set of SMs.
+
+    // LIBSMCTRL INSTANTIATION
+    libsmctrl_set_global_mask(~0x1ull);	// Allow work on only TPC 0
+
+    cudaStream_t stream_A, stream_B;
+    cudaStreamCreate(&stream_A);
+    cudaStreamCreate(&stream_B);
+
+    // Partition TPCs for each kernel
+    libsmctrl_set_stream_mask(stream_B, ~0xf0ull);	// disable 0-3
+    libsmctrl_set_stream_mask(stream_A, ~0x0full);	// disable 4-7
+
     printf("\n=== Launching Kernels ===\n");
     printf("Blocks per kernel: %d\n", blocksToLaunch);
     printf("Threads per block: %d\n", threadsPerBlock);
@@ -291,7 +302,7 @@ int main(void) {
         blocksToLaunch,
         threadsPerBlock,
         N,
-	stream1
+	stream_A
     );
 
     // Launch fused CNN kernel
@@ -309,11 +320,11 @@ int main(void) {
         blocksToLaunch,
         threadsPerBlock,
         cnn_batch_size,
-	stream2
+	stream_B
     );
 
-    cudaStreamSynchronize(stream1);
-    cudaStreamSynchronize(stream2);
+    cudaStreamSynchronize(stream_A);
+    cudaStreamSynchronize(stream_B);
 
     // Copy and print neural network output
     std::vector<float> h_nn_output(out_features2 * batch_size);
@@ -348,8 +359,8 @@ int main(void) {
     }
 
     // Cleanup
-    cudaStreamDestroy(stream1);
-    cudaStreamDestroy(stream2);
+    cudaStreamDestroy(stream_A);
+    cudaStreamDestroy(stream_B);
     cudaFree(d_W1); cudaFree(d_b1); cudaFree(d_W2); cudaFree(d_b2);
     cudaFree(d_nn_input); cudaFree(d_nn_output);
     cudaFree(d_SMC_workerCount1); cudaFree(d_SMC_newChunkSeq1);

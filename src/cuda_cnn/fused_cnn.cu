@@ -101,14 +101,13 @@ __global__ void fused_nn_kernel(
 
     int offsetInCTA = threadIdx.x;
     int SMC_chunkID = 0;
-
+    
     SMC_Begin
 
     // Only run on SMS >= 8
     if (SMC_smid < 8) return;
 
     if (offsetInCTA == 0) atomicAdd(&sm_usage_log[SMC_smid + 16], 1);
-
     // 1. Convolution + BatchNorm + ReLU
     int H_out = H - K_h + 1;
     int W_out = W - K_w + 1;
