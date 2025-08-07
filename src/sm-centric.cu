@@ -288,8 +288,20 @@ int main(void) {
     printf("\n=== Launching Kernels ===\n");
     printf("Blocks per kernel: %d\n", blocksToLaunch);
     printf("Threads per block: %d\n", threadsPerBlock);
-    printf("Launching kernel with %d blocks. Expecting %u workers needed.\n", blocksToLaunch, SMC_numNeeded());
-    
+   
+    // Number of Latency runs
+    const int numRuns = 100;
+    std::vector<float> latencies_kernel1, latencies_kernel2;
+
+    for(int run = 0; run < numRuns; run++){
+	  // Measure latency for linear_relu_linear_sigmoid neural network.
+	  cudaEvent_t start1, stop1;
+	  cudaEventCreate(&start1);
+	  cudaEventCreate(&stop1);
+
+	  cudaEventRecord(start1, stream_A);
+
+    //printf("Launching kernel with %d blocks. Expecting %u workers needed.\n", blocksToLaunch, SMC_numNeeded());
     // Launch the fused neural network kernel using the launcher
     print_timestamp("Launching LinearReluLinearSigmoid kernel");
     launchLinearReluLinearSigmoid(
@@ -305,8 +317,25 @@ int main(void) {
 	stream_A
     );
 
+    cudaEventRecord(stop1, stream_A);
+    cudaEventSynchronize(stop1);
+
+    float ms1 = 0;
+    cudaEventElapsedTime(&ms1, start1, stop1);
+    latencies_kernel1.push_back(ms1);
+
+    cudaEventDestroy(start1);
+    cudaEventDestroy(stop1);
+
+    // Measure latency for FusedNeuralNetwork kernel
+    cudaEvent_t start2, stop2;
+    cudaEventCreate(&start2);
+    cudaEventCreate(&stop2);
+
+    cudaEventRecord(start2, stream_B);
+
     // Launch fused CNN kernel
-    print_timestamp("Launching FusedCNN kernel");
+    //print_timestamp("Launching FusedCNN kernel");
     launchFusedNeuralNetwork(
         d_conv_weights, d_conv_bias,
         C_in, C_out, H, W, K_h, K_w,
@@ -323,6 +352,28 @@ int main(void) {
 	stream_B
     );
 
+    cudaEventRecord(stop2, stream_B);
+    cudaEventSynchronize(stop2);
+
+    float ms2 = 0;
+    cudaEventElapsedTime(&ms2, start2, stop2);
+    latencies_kernel2.push_back(ms2);
+
+    cudaEventDestroy(start2);
+    cudaEventDestroy(stop2);
+
+    } 
+
+
+    // Write results to CSV
+    std::ofstream outfile("sm_centric_latencies.csv");
+    outfile << "LinearReluLinearSigmoid,FusedCNN\n";
+    for (int i = 0; i < numRuns; ++i) {
+        outfile << latencies_kernel1[i] << "," << latencies_kernel2[i] << "\n";
+    }
+    outfile.close();
+
+    // Post-processing
     cudaStreamSynchronize(stream_A);
     cudaStreamSynchronize(stream_B);
 
