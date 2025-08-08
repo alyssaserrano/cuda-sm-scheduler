@@ -173,7 +173,8 @@ int main(void) {
     cudaMemset(d_sm_usage_log, 0, 32 * sizeof(int));
 
     // Allocate device memory for SM-centric parameters
-    unsigned int *d_SMC_workerCount1, *d_SMC_newChunkSeq1, *d_SMC_workerCount2, *d_SMC_newChunkSeq2;
+    unsigned int *d_SMC_workerCount1, *d_SMC_newChunkSeq1;
+    unsigned int *d_SMC_workerCount2, *d_SMC_newChunkSeq2;
     
     cudaMalloc(&d_SMC_workerCount1, SMC_workersNeeded * sizeof(unsigned int));
     cudaMalloc(&d_SMC_newChunkSeq1, K * sizeof(unsigned int));
@@ -271,13 +272,16 @@ int main(void) {
 
     /*** LAUNCH KERNELS USING LIBSMCTRL LIBRARY***/
     int blocksToLaunch = std::max(K, (unsigned int)16) / 2;	// Had to divide by 2 since libsmctrl is a TPC/SM relationship.
+    //int blocksToLaunch = K;
     								// Therefore diving by 2 ensures that we split the amount of work blocks
     								// we need to do for each set of SMs.
 
     // LIBSMCTRL INSTANTIATION
     libsmctrl_set_global_mask(~0x1ull);	// Allow work on only TPC 0
 
-    cudaStream_t stream_A, stream_B;
+    //cudaStream_t stream_A, stream_B;
+    cudaStream_t stream_A;
+    cudaStream_t stream_B;
     cudaStreamCreate(&stream_A);
     cudaStreamCreate(&stream_B);
 
@@ -294,6 +298,12 @@ int main(void) {
     std::vector<float> latencies_kernel1, latencies_kernel2;
 
     for(int run = 0; run < numRuns; run++){
+	  // Need to reset the worker count for each run!
+	  cudaMemset(d_SMC_workerCount1, 0, SMC_workersNeeded * sizeof(unsigned int));
+          cudaMemset(d_SMC_newChunkSeq1, 0, K * sizeof(unsigned int));
+          cudaMemset(d_SMC_workerCount2, 0, SMC_workersNeeded * sizeof(unsigned int));
+          cudaMemset(d_SMC_newChunkSeq2, 0, K * sizeof(unsigned int));
+
 	  // Measure latency for linear_relu_linear_sigmoid neural network.
 	  cudaEvent_t start1, stop1;
 	  cudaEventCreate(&start1);
@@ -382,13 +392,13 @@ int main(void) {
     cudaMemcpy(h_nn_output.data(), d_nn_output, out_features2 * batch_size * sizeof(float), cudaMemcpyDeviceToHost);
 
     printf("\n=== Neural Network Output ===\n");
-    for (int i = 0; i < out_features2; ++i) {
+    /*for (int i = 0; i < out_features2; ++i) {
         printf("Class %d: ", i);
         for (int j = 0; j < batch_size; ++j) {
             printf("%8.5f ", h_nn_output[i * batch_size + j]);
         }
         printf("\n");
-    }
+    }*/
 
     // Copy back and analyze SM usage
     std::vector<int> sm_usage_log(32);
