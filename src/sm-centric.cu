@@ -14,8 +14,8 @@
 #include <random>
 #include "libsmctrl.h"
 #include "sm-centric_macros.hh"
-#include "cuda-neural-network/linear_relu_linear_sigmoid.hh"
-#include "cuda-neural-network/nn_launcher.hh"
+#include "cuda-linear-nn/linear_relu_linear_sigmoid.hh"
+#include "cuda-linear-nn/nn_launcher.hh"
 #include "cuda_cnn/fused_cnn.hh"
 
 /**** MACROS ****/
@@ -187,9 +187,11 @@ int main(void) {
     cudaMemcpy(d_SMC_workerCount2, SMC_workerCount, SMC_workersNeeded * sizeof(unsigned int), cudaMemcpyHostToDevice);
     cudaMemcpy(d_SMC_newChunkSeq2, SMC_newChunkSeq, K * sizeof(unsigned int), cudaMemcpyHostToDevice);
 
-    // Linear-Relu-Linear-Sigmoid Neural network dimensions
+    // Linear-Neural-Network dimensions
     int in_features1 = 8, out_features1 = 16;
     int in_features2 = out_features1, out_features2 = 4;
+    int in_features3 = out_features2, out_features3 = 6;
+    int in_features4 = out_features3, out_features4 = 4;
     int batch_size = N / in_features1; // Make sure N is divisible by in_features1!
     int NN = batch_size * in_features1;
 
@@ -198,23 +200,35 @@ int main(void) {
     std::vector<float> b1(out_features1, 0.0f);
     std::vector<float> W2(in_features2 * out_features2, 0.1f);
     std::vector<float> b2(out_features2, 0.0f);
+    std::vector<float> W3(in_features3 * out_features3, 0.2f); // initialize as needed
+    std::vector<float> b3(out_features3, 0.0f);
+    std::vector<float> W4(in_features4 * out_features4, 0.3f); // initialize as needed
+    std::vector<float> b4(out_features4, 0.0f);
     std::vector<float> nn_input(NN, 1.0f);
-    std::vector<float> nn_output(out_features2 * batch_size, 0.0f);
+    std::vector<float> nn_output(out_features4 * batch_size, 0.0f);
 
     // Allocate device memory for neural network
-    float *d_W1, *d_b1, *d_W2, *d_b2, *d_nn_input, *d_nn_output;
+    float *d_W1, *d_b1, *d_W2, *d_b2, *d_W3, *d_b3, *d_W4, *d_b4, *d_nn_input, *d_nn_output;
     cudaMalloc(&d_W1, in_features1 * out_features1 * sizeof(float));
     cudaMalloc(&d_b1, out_features1 * sizeof(float));
     cudaMalloc(&d_W2, in_features2 * out_features2 * sizeof(float));
     cudaMalloc(&d_b2, out_features2 * sizeof(float));
+    cudaMalloc(&d_W3, in_features3 * out_features3 * sizeof(float));
+    cudaMalloc(&d_b3, out_features3 * sizeof(float));
+    cudaMalloc(&d_W4, in_features4 * out_features4 * sizeof(float));
+    cudaMalloc(&d_b4, out_features4 * sizeof(float));
     cudaMalloc(&d_nn_input, NN * sizeof(float));
-    cudaMalloc(&d_nn_output, out_features2 * batch_size * sizeof(float));
+    cudaMalloc(&d_nn_output, out_features4 * batch_size * sizeof(float));
 
     // Copy host data to device
     cudaMemcpy(d_W1, W1.data(), in_features1 * out_features1 * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_b1, b1.data(), out_features1 * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_W2, W2.data(), in_features2 * out_features2 * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_b2, b2.data(), out_features2 * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_W3, W3.data(), in_features3 * out_features3 * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_b3, b3.data(), out_features3 * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_W4, W4.data(), in_features4 * out_features4 * sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_b4, b4.data(), out_features4 * sizeof(float), cudaMemcpyHostToDevice);
     cudaMemcpy(d_nn_input, nn_input.data(), NN * sizeof(float), cudaMemcpyHostToDevice);
 
     // Fused CNN Neural Network
@@ -271,15 +285,12 @@ int main(void) {
     cudaMemcpy(d_fc_bias, fc_bias.data(), fc_bias.size() * sizeof(float), cudaMemcpyHostToDevice);
 
     /*** LAUNCH KERNELS USING LIBSMCTRL LIBRARY***/
-    int blocksToLaunch = std::max(K, (unsigned int)16) / 2;	// Had to divide by 2 since libsmctrl is a TPC/SM relationship.
+    int blocksToLaunch = std::max(K, (unsigned int)16);	
     //int blocksToLaunch = K;
-    								// Therefore diving by 2 ensures that we split the amount of work blocks
-    								// we need to do for each set of SMs.
 
     // LIBSMCTRL INSTANTIATION
     libsmctrl_set_global_mask(~0x1ull);	// Allow work on only TPC 0
 
-    //cudaStream_t stream_A, stream_B;
     cudaStream_t stream_A;
     cudaStream_t stream_B;
     cudaStreamCreate(&stream_A);
@@ -288,6 +299,9 @@ int main(void) {
     // Partition TPCs for each kernel
     libsmctrl_set_stream_mask(stream_B, ~0xf0ull);	// disable 0-3
     libsmctrl_set_stream_mask(stream_A, ~0x0full);	// disable 4-7
+    //libsmctrl_set_stream_mask(stream_B, 0xFC);	// enable 0-1
+    //libsmctrl_set_stream_mask(stream_A, 0x03);	// enable 2-7
+
 
     printf("\n=== Launching Kernels ===\n");
     printf("Blocks per kernel: %d\n", blocksToLaunch);
@@ -314,18 +328,20 @@ int main(void) {
     //printf("Launching kernel with %d blocks. Expecting %u workers needed.\n", blocksToLaunch, SMC_numNeeded());
     // Launch the fused neural network kernel using the launcher
     print_timestamp("Launching LinearReluLinearSigmoid kernel");
-    launchLinearReluLinearSigmoid(
-        d_W1, d_b1, in_features1, out_features1,
-        d_W2, d_b2, in_features2, out_features2,
-        d_nn_input, d_nn_output, batch_size,
-        d_SMC_workerCount1, d_SMC_newChunkSeq1,
-        chunksPerSM, SMC_workersNeeded,
-        d_sm_usage_log,
-        blocksToLaunch,
-        threadsPerBlock,
-        N,
-	stream_A
-    );
+    launchLinearNeuralNetwork(
+    	d_W1, d_b1, in_features1, out_features1,
+    	d_W2, d_b2, in_features2, out_features2,
+    	d_W3, d_b3, in_features3, out_features3,
+    	d_W4, d_b4, in_features4, out_features4,
+    	d_nn_input, d_nn_output, batch_size,
+    	d_SMC_workerCount1, d_SMC_newChunkSeq1,
+    	chunksPerSM, SMC_workersNeeded,
+    	d_sm_usage_log,
+    	blocksToLaunch,
+    	threadsPerBlock,
+    	N,
+    	stream_A
+	);
 
     cudaEventRecord(stop1, stream_A);
     cudaEventSynchronize(stop1);
@@ -391,8 +407,8 @@ int main(void) {
     std::vector<float> h_nn_output(out_features2 * batch_size);
     cudaMemcpy(h_nn_output.data(), d_nn_output, out_features2 * batch_size * sizeof(float), cudaMemcpyDeviceToHost);
 
-    printf("\n=== Neural Network Output ===\n");
-    /*for (int i = 0; i < out_features2; ++i) {
+    /*printf("\n=== Neural Network Output ===\n");
+    for (int i = 0; i < out_features2; ++i) {
         printf("Class %d: ", i);
         for (int j = 0; j < batch_size; ++j) {
             printf("%8.5f ", h_nn_output[i * batch_size + j]);
@@ -422,11 +438,16 @@ int main(void) {
     // Cleanup
     cudaStreamDestroy(stream_A);
     cudaStreamDestroy(stream_B);
-    cudaFree(d_W1); cudaFree(d_b1); cudaFree(d_W2); cudaFree(d_b2);
-    cudaFree(d_nn_input); cudaFree(d_nn_output);
+    cudaFree(d_sm_usage_log);
     cudaFree(d_SMC_workerCount1); cudaFree(d_SMC_newChunkSeq1);
     cudaFree(d_SMC_workerCount2); cudaFree(d_SMC_newChunkSeq2);
-    cudaFree(d_sm_usage_log);
+
+    // Linear-Neural-Network Clean up
+    cudaFree(d_W1); cudaFree(d_b1);
+    cudaFree(d_W2); cudaFree(d_b2);
+    cudaFree(d_W3); cudaFree(d_b3);
+    cudaFree(d_W4); cudaFree(d_b4);
+    cudaFree(d_nn_input); cudaFree(d_nn_output);
 
     // Cleanup for CNN network
     cudaFree(d_conv_weights); cudaFree(d_conv_bias);
